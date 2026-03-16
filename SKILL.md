@@ -1,12 +1,3 @@
----
-name: switch-model
-description: 切换当前使用的 AI 模型。当用户想切换模型、选择不同的 AI 提供商、查看可用模型列表、询问当前用的哪个模型、测试模型是否正常时触发。
-version: 1.0.0
-homepage: https://github.com/Daiyimo/openclaw-switch-model
-user-invocable: true
-metadata: {"openclaw":{"emoji":"🔀","requires":{"config":["models"]}}}
----
-
 # switch-model — AI 模型切换助手
 
 帮助用户安全地检测并切换 OpenClaw 配置中的 AI 模型，切换前自动探测各模型连通性和 Key 有效性，避免切换到不可用的模型导致服务中断。
