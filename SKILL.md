@@ -1,3 +1,12 @@
+---
+name: switch-model
+description: 切换当前使用的 AI 模型。当用户想切换模型、选择不同的 AI 提供商、查看可用模型列表、询问当前用的哪个模型、测试模型是否正常时触发。
+version: 1.0.0
+homepage: https://github.com/Daiyimo/openclaw-switch-model
+user-invocable: true
+metadata: {"openclaw":{"emoji":"🔀","requires":{"config":["models"]}}}
+---
+
 # switch-model — AI 模型切换助手
 
 帮助用户安全地检测并切换 OpenClaw 配置中的 AI 模型，切换前自动探测各模型连通性和 Key 有效性，避免切换到不可用的模型导致服务中断。
@@ -106,22 +115,23 @@ python3 "{baseDir}/scripts/set-model.py" "TARGET_MODEL_ID"
 
 ---
 
-### 第六步：触发 gateway 热重载 / 重启
+### 第六步：等待 gateway hot reload 完成
 
-写入成功后，运行：
+写入配置后，gateway 会**自动**检测到文件变更并触发 hot reload，无需手动干预。运行以下脚本等待其完成并确认恢复：
 
 ```bash
 python3 "{baseDir}/scripts/reload-gateway.py"
 ```
 
+> ⚠️ **不要在此之前或之后额外执行任何 reload/restart 命令**，gateway 已在自动处理，重复触发反而会造成多次掉线。
+
 根据输出给出对应反馈：
 
 | 输出 | 含义 | 向用户说明 |
 |------|------|-----------|
-| `HOT_RELOAD` | gateway 已自动热重载 | "配置已热重载，当前对话即刻生效 ✅" |
-| `RELOADED` | 执行软重载成功 | "已完成软重载，当前对话即刻生效 ✅" |
-| `RESTARTED` | 执行完整重启成功 | "gateway 已重启，对话服务已恢复 ✅" |
-| `FAILED:...` | 重启失败 | "⚠️ 配置已写入，但 gateway 重启失败：[原因]。请手动执行 `openclaw gateway restart`" |
+| `HOT_RELOAD` | gateway 已自动完成 hot reload 并恢复正常 | "✅ 配置已生效，对话已恢复正常" |
+| `RESTARTED` | hot reload 异常，已兜底完整重启并恢复 | "✅ gateway 已重启恢复，对话正常" |
+| `FAILED:...` | 重启也失败了 | "⚠️ gateway 未能恢复：[原因]。请手动执行 `openclaw gateway restart`" |
 
 ---
 
