@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """
-reload-gateway.py — 触发 OpenClaw gateway 配置热重载或重启，以使新模型配置生效。
+reload-gateway.py — 等待 OpenClaw gateway 完成 hot reload 并确认恢复正常。
+
+背景：
+  修改 agents.defaults.model.primary 后，gateway 的文件监听器会自动触发 hot reload。
+  本脚本不主动触发任何 reload 或 restart，只负责等待 gateway 自动完成重载后确认其恢复正常。
+  只有在等待超时（gateway 未能自动恢复）时，才作为最后兜底执行 restart。
 
 策略（优先级从高到低）：
-  1. 先等待 1 秒，检测 gateway 是否已通过文件监听自动热重载（GET /health）
-  2. 若已热重载（health 正常），则输出 HOT_RELOAD 并退出
-  3. 若未热重载，尝试执行 `openclaw gateway reload`（软重载）
-  4. 若软重载失败，执行 `openclaw gateway restart`（完整重启），等待最多 15 秒恢复
-  5. 输出最终状态：RELOADED / RESTARTED / FAILED:<原因>
+  1. 等待最多 8 秒，轮询 /health 直到 gateway 重载完成并恢复
+  2. 若在 8 秒内恢复 → 输出 HOT_RELOAD
+  3. 若超时仍未恢复（异常情况）→ 作为兜底执行 `openclaw gateway restart`
+  4. 等待重启完成最多 15 秒 → 输出 RESTARTED 或 FAILED:...
 
 安全说明：
-  - 仅调用 openclaw 官方 CLI 命令和本机 localhost 健康检查端点
+  - 正常流程不执行任何 CLI 命令，仅轮询本机 localhost 健康检查端点
+  - 仅在异常兜底时调用 openclaw gateway restart
   - 不访问外部网络，不修改任何配置文件
-  - 使用 gateway token 仅用于健康检查鉴权（从配置读取）
 
 退出码：0 成功，1 失败
 """
@@ -32,8 +36,10 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 CONFIG_PATH = os.path.expanduser("~/.openclaw/openclaw.json")
-HEALTH_TIMEOUT = 5
-RESTART_WAIT = 15  # 等待重启完成的最大秒数
+HEALTH_TIMEOUT = 3       # 单次 /health 请求超时秒数
+HOT_RELOAD_WAIT = 8      # 等待 hot reload 自动完成的最大秒数
+RESTART_WAIT = 15        # 兜底重启后等待恢复的最大秒数
+POLL_INTERVAL = 0.5      # 轮询间隔秒数
 
 
 def load_gateway_info():
@@ -43,14 +49,13 @@ def load_gateway_info():
             config = json.load(f)
         port = config.get("gateway", {}).get("port", 18789)
         token = config.get("gateway", {}).get("auth", {}).get("token", "")
-        reload_mode = config.get("gateway", {}).get("reload", "hybrid")
-        return port, token, reload_mode
+        return port, token
     except Exception:
-        return 18789, "", "hybrid"
+        return 18789, ""
 
 
 def check_health(port, token):
-    """调用 GET /health 检查 gateway 是否在线"""
+    """调用 GET /health，返回 True 表示 gateway 在线且正常"""
     url = "http://127.0.0.1:" + str(port) + "/health"
     headers = {}
     if token:
@@ -61,6 +66,16 @@ def check_health(port, token):
             return resp.status == 200
     except Exception:
         return False
+
+
+def wait_for_health(port, token, max_wait):
+    """轮询直到 gateway 恢复健康，返回是否在超时前恢复"""
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        if check_health(port, token):
+            return True
+        time.sleep(POLL_INTERVAL)
+    return False
 
 
 def run_cmd(cmd_list):
@@ -81,62 +96,32 @@ def run_cmd(cmd_list):
         return False, "", str(e)
 
 
-def wait_for_health(port, token, max_wait):
-    """等待 gateway 恢复健康，最多等待 max_wait 秒，返回是否成功"""
-    deadline = time.time() + max_wait
-    while time.time() < deadline:
-        if check_health(port, token):
-            return True
-        time.sleep(0.8)
-    return False
-
-
 def main():
-    port, token, reload_mode = load_gateway_info()
+    port, token = load_gateway_info()
 
-    # 若配置为 reload: "off"，直接走重启路径
-    if reload_mode == "off":
-        ok, stdout, stderr = run_cmd(["openclaw", "gateway", "restart"])
-        if ok:
-            alive = wait_for_health(port, token, RESTART_WAIT)
-            if alive:
-                print("RESTARTED", flush=True)
-                sys.exit(0)
-            else:
-                print("FAILED:重启命令成功但 gateway 未能在 " + str(RESTART_WAIT) + "s 内恢复", flush=True)
-                sys.exit(1)
-        else:
-            print("FAILED:" + (stderr or stdout or "重启命令执行失败"), flush=True)
-            sys.exit(1)
+    # 等待 gateway 自动完成 hot reload 并恢复
+    # gateway 文件监听有 300ms debounce，hot reload 本身耗时极短，8 秒绰绰有余
+    alive = wait_for_health(port, token, HOT_RELOAD_WAIT)
 
-    # 等待热重载（model.primary 变更属于热重载范畴）
-    time.sleep(1.2)
-    if check_health(port, token):
+    if alive:
         print("HOT_RELOAD", flush=True)
         sys.exit(0)
 
-    # 热重载未触发或 gateway 无响应，尝试软重载
-    ok, stdout, stderr = run_cmd(["openclaw", "gateway", "reload"])
-    if ok:
-        time.sleep(1.0)
-        if check_health(port, token):
-            print("RELOADED", flush=True)
-            sys.exit(0)
-
-    # 软重载无效，执行完整重启
+    # 超时未恢复（异常情况）：兜底执行完整重启
     ok, stdout, stderr = run_cmd(["openclaw", "gateway", "restart"])
-    if ok:
-        alive = wait_for_health(port, token, RESTART_WAIT)
-        if alive:
-            print("RESTARTED", flush=True)
-            sys.exit(0)
-        else:
-            print("FAILED:重启命令成功但 gateway 未能在 " + str(RESTART_WAIT) + "s 内恢复", flush=True)
-            sys.exit(1)
-    else:
+    if not ok:
         print("FAILED:" + (stderr or stdout or "重启命令执行失败"), flush=True)
+        sys.exit(1)
+
+    alive = wait_for_health(port, token, RESTART_WAIT)
+    if alive:
+        print("RESTARTED", flush=True)
+        sys.exit(0)
+    else:
+        print("FAILED:重启命令成功但 gateway 未能在 " + str(RESTART_WAIT) + "s 内恢复", flush=True)
         sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
+
