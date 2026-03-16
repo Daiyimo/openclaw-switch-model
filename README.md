@@ -1,153 +1,136 @@
-# switch-model — AI 模型切换助手
+# switch-model
 
-帮助用户安全地检测并切换 OpenClaw 配置中的 AI 模型，切换前自动探测各模型连通性和 Key 有效性，避免切换到不可用的模型导致服务中断。
+> OpenClaw Skill · 安全切换 AI 模型，切换前自动检测 Key 有效性，防止切换到不可用模型导致服务中断。
 
 ---
 
-## 工作流程
+## 功能特性
 
-### 第一步：读取模型列表
+- 🔍 **自动探测**：切换前对所有配置的模型发送探针请求，检测连通性和 API Key 有效性
+- 🔑 **Key 有效性检测**：能识别 Key 过期（401/403）、模型不可用（404）、配额超限（429）等具体原因
+- 🛡️ **切换保护**：Key 失效或模型不可用时直接拒绝切换，避免 OpenClaw 因切换到不可用模型而崩溃
+- 🌐 **代理模式支持**：对走 OpenClaw gateway 代理的 provider（如 MiniMax），通过 gateway 转发探针，准确检测真实 Key 状态
+- ♻️ **热重载**：写入配置后自动触发 gateway 热重载，`model.primary` 变更无需完整重启即可生效
+- 🖥️ **跨平台**：兼容 Windows / macOS / Linux，Python 3 标准库实现，无需额外依赖
+- 🤝 **多 Provider 兼容**：支持 Claude、GLM、MiniMax、Stepfun、OpenRouter 等任意在 `openclaw.json` 中配置的模型
 
-运行以下命令，获取所有配置的模型和当前 primary 模型：
+---
+
+## 使用方式
+
+在 OpenClaw 对话中输入：
+
+```
+/switch-model
+```
+
+或直接用自然语言触发：
+
+```
+帮我切换模型
+我想换一个 AI
+查看当前可用的模型
+```
+
+**典型对话流程：**
+
+```
+用户: /switch-model
+
+AI: 正在检测各模型连通性和 Key 有效性，请稍候……
+
+AI: 🔍 模型检测完成：
+
+  ✅ 1. Step 3.5 Flash      stepfun/step-3.5-flash  ← 当前
+  ✅ 2. Step 3.5 Flash Free openrouter/stepfun/step-3.5-flash:free
+  🔑    MiniMax M2.5        minimax/MiniMax-M2.5   (Key 已失效)
+
+  当前使用：Step 3.5 Flash ✅ 正常
+  请问想切换到哪个模型？
+
+用户: 换第 2 个
+
+AI: ✅ 已从 Step 3.5 Flash（stepfun/step-3.5-flash）
+      切换到 Step 3.5 Flash Free（openrouter/stepfun/step-3.5-flash:free）
+      配置已热重载，当前对话即刻生效，继续吧！
+```
+
+---
+
+## 安装
+
+### 方式一：手动安装（推荐）
+
+将本仓库克隆或下载到 OpenClaw skills 目录：
 
 ```bash
-python3 "{baseDir}/scripts/list-models.py"
+# macOS / Linux
+git clone https://github.com/Daiyimo/openclaw-switch-model \
+  ~/.openclaw/skills/switch-model
+
+# Windows（PowerShell）
+git clone https://github.com/Daiyimo/openclaw-switch-model `
+  "$env:USERPROFILE\.openclaw\skills\switch-model"
 ```
 
-输出格式：
-- 第一行：当前 primary 模型 ID（如 `stepfun/step-3.5-flash`）
-- 后续每行：`provider/modelId\t模型名称`
-
----
-
-### 第二步：探测所有模型连通性与 Key 有效性
-
-> ⚠️ **这一步必须执行，不可跳过**：Key 过期或网络故障会导致切换后 openclaw 完全不可用。
+### 方式二：通过水产市场安装
 
 ```bash
-python3 "{baseDir}/scripts/probe-models.py"
+openclawmp install skill/@Daiyimo/switch-model
 ```
 
-每行输出格式：
-- `provider/modelId\tOK\t模型名称` — 连通且 Key 有效
-- `provider/modelId\tFAIL\t模型名称\t失败原因` — 失败（原因见下方分类）
-
-执行前告知用户：
-> "正在检测各模型连通性和 Key 有效性，请稍候……"
-
----
-
-### 第三步：解读失败原因并向用户展示
-
-**失败原因分类标准**（根据失败原因文字判断）：
-
-| 失败原因包含关键词 | 判定类型 | 含义 |
-|---|---|---|
-| `HTTP 401` / `HTTP 403` / `unauthorized` / `invalid.*key` / `key.*expired` / `authentication` / `access denied` | 🔑 **Key 失效** | API Key 过期或无效，必须更换 |
-| `HTTP 404` / `does not exist` / `not found` / `no access` | 🚫 **模型不可用** | 模型 ID 错误或无权访问 |
-| `HTTP 429` / `rate limit` / `quota` | ⏱️ **配额超限** | 超出调用频率或额度 |
-| `连接失败` / `URLError` / `timeout` / `timed out` | 🌐 **网络问题** | 网络不通，可能是临时故障 |
-| 其他 | ❓ **未知错误** | 其他原因 |
-
-**展示格式**（在可选项编号前标注状态）：
-
-```
-🔍 模型检测完成：
-
-  ✅ 1. Step 3.5 Flash    stepfun/step-3.5-flash  ← 当前
-  ✅ 2. Step 3.5 Flash Free  openrouter/stepfun/...
-  🔑    MiniMax M2.5       minimax/MiniMax-M2.5   (Key 已失效)
-
-当前使用：Step 3.5 Flash（stepfun/step-3.5-flash）✅ 正常
-
-请问想切换到哪个模型？（输入编号或名称）
-```
-
-特殊提示：
-- 当前模型 FAIL → 在列表前额外显示：`⚠️ 当前模型 [模型名] 检测不可用（[失败原因类型]），建议立即切换！`
-- 全部 FAIL → 告知所有模型均不可用，停止流程，不询问切换
-
----
-
-### 第四步：等待用户选择
-
-用户可用以下方式表达：
-- 编号（如 `1`、`选 2`）
-- 名称片段（如 `MiniMax`、`flash`，大小写不敏感）
-- 完整 ID（如 `minimax/MiniMax-M2.5`）
-
-**匹配后的阻断规则（按优先级）**：
-
-1. **Key 失效 / 模型不可用 / 配额超限** → **直接拒绝，不切换**
-   > "❌ 该模型检测到 [失败原因类型]，切换后 openclaw 将无法正常使用。如需使用，请先更新 API Key。"
-
-2. **网络问题** → 询问用户是否确认（给出风险提示）
-   > "⚠️ 该模型目前网络不通，可能是临时故障。仍然切换吗？（yes/no）"
-   > 用户确认 yes 才继续，no 则重新让用户选择。
-
-3. **目标与当前相同且当前 OK** → 告知已在使用该模型，不做写入，结束。
-
-4. **OK 的模型** → 直接进入写入步骤。
-
----
-
-### 第五步：写入配置
-
-确认目标模型 ID 后，运行：
+### 安装验证
 
 ```bash
-python3 "{baseDir}/scripts/set-model.py" "TARGET_MODEL_ID"
-```
-
-将 `TARGET_MODEL_ID` 替换为实际的模型 ID 字符串（如 `stepfun/step-3.5-flash`）。
-
-- 输出 `OK` → 继续第六步
-- 输出 `ERROR:...` → 告知写入失败，停止，**不执行重启**
-
----
-
-### 第六步：触发 gateway 热重载 / 重启
-
-写入成功后，运行：
-
-```bash
-python3 "{baseDir}/scripts/reload-gateway.py"
-```
-
-根据输出给出对应反馈：
-
-| 输出 | 含义 | 向用户说明 |
-|------|------|-----------|
-| `HOT_RELOAD` | gateway 已自动热重载 | "配置已热重载，当前对话即刻生效 ✅" |
-| `RELOADED` | 执行软重载成功 | "已完成软重载，当前对话即刻生效 ✅" |
-| `RESTARTED` | 执行完整重启成功 | "gateway 已重启，对话服务已恢复 ✅" |
-| `FAILED:...` | 重启失败 | "⚠️ 配置已写入，但 gateway 重启失败：[原因]。请手动执行 `openclaw gateway restart`" |
-
----
-
-### 第七步：最终确认
-
-切换完成后，用一句话总结：
-
-```
-✅ 已从 [旧模型名]（[旧模型ID]）切换到 [新模型名]（[新模型ID]），继续吧！
+openclaw skill validate switch-model
 ```
 
 ---
 
-## 边界情况处理
+## 文件结构
 
-- **probe-models.py 执行超时或崩溃**：告知用户探测失败，**不继续切换流程**，建议检查网络后重试
-- **set-model.py 写入失败**：告知具体错误，不执行 reload
-- **reload-gateway.py 执行失败**：告知配置已写入但 gateway 未重载，提示手动执行 `openclaw gateway restart`
-- **没有任何模型配置**：提示用户在 `openclaw.json` 的 `models.providers` 中添加模型
+```
+switch-model/
+├── SKILL.md                  # Skill 主入口，定义触发规则和执行流程
+└── scripts/
+    ├── list-models.py         # 读取 openclaw.json 中的模型列表和当前 primary 模型
+    ├── probe-models.py        # 对每个模型发探针请求，检测连通性和 Key 有效性
+    ├── set-model.py           # 将目标模型 ID 写入 agents.defaults.model.primary
+    ├── reload-gateway.py      # 等待 gateway 自动 hot reload 完成并确认恢复（不主动触发）
+```
 
 ---
 
-## 注意事项
+## 探测失败原因分类
 
-- 本 skill 探测模型时仅发送 `max_tokens=1` 的最小请求，不产生有效对话内容
-- API Key 在内存中使用，不会被输出、记录或外传
-- 写操作仅修改 `agents.defaults.model.primary` 一个字段，不影响其他配置
-- `agents.defaults.model.primary` 变更属于热重载范畴，通常无需完整重启
-- 对于走 openclaw gateway 代理的 provider（如 minimax），探针请求会通过 gateway 转发，可准确检测真实 Key 有效性
+| 图标 | 类型 | 触发条件 | 处理方式 |
+|------|------|---------|---------|
+| 🔑 | Key 失效 | HTTP 401 / 403 / unauthorized / key expired | **直接拒绝切换** |
+| 🚫 | 模型不可用 | HTTP 404 / model not found / no access | **直接拒绝切换** |
+| ⏱️ | 配额超限 | HTTP 429 / rate limit / quota exceeded | **直接拒绝切换** |
+| 🌐 | 网络问题 | 连接超时 / URLError | 询问用户确认后才切换 |
+
+---
+
+## 系统要求
+
+| 要求 | 说明 |
+|------|------|
+| OpenClaw | 任意版本，需已配置 `models.providers` |
+| Python | 3.6+（使用标准库，无需 pip 安装） |
+| 配置文件 | `~/.openclaw/openclaw.json` 存在且可读写 |
+
+---
+
+## 安全说明
+
+- **API Key 不输出**：Key 仅在内存中用于构造请求头，不会被打印、记录或传到任何第三方
+- **最小写权限**：`set-model.py` 仅修改 `agents.defaults.model.primary` 一个字段，不触碰其他配置
+- **无外部网络请求**：所有网络请求仅发向 provider 配置的 `baseUrl`，`reload-gateway.py` 仅调用本机 `localhost`
+- **原子写入**：配置文件通过临时文件 + `os.replace()` 原子替换，避免写入中断损坏原文件
+
+---
+
+## 许可证
+
+MIT License · © 2026 [Daiyimo](https://github.com/Daiyimo)
