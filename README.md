@@ -13,6 +13,8 @@
 - ♻️ **热重载**：写入配置后自动触发 gateway 热重载，`model.primary` 变更无需完整重启即可生效
 - 🖥️ **跨平台**：兼容 Windows / macOS / Linux，Python 3 标准库实现，无需额外依赖
 - 🤝 **多 Provider 兼容**：支持 Claude、GLM、MiniMax、Stepfun、OpenRouter 等任意在 `openclaw.json` 中配置的模型
+- 🔄 **一键更新**：Agent 可调用更新脚本自动拉取最新版本，支持 Git 拉取和目录复制两种方式
+- 🗑️ **一键卸载**：Agent 可调用卸载脚本完整移除 skill
 
 ---
 
@@ -97,7 +99,38 @@ switch-model/
     ├── probe-models.py        # 对每个模型发探针请求，检测连通性和 Key 有效性
     ├── set-model.py           # 将目标模型 ID 写入 agents.defaults.model.primary
     ├── reload-gateway.py      # 等待 gateway 自动 hot reload 完成并确认恢复（不主动触发）
+    ├── update-skill.py        # 一键更新 skill 到最新版本（面向 Agent）
+    └── uninstall-skill.py     # 一键卸载 skill（面向 Agent）
 ```
+
+---
+
+## Agent 一键维护命令
+
+面向 Agent 的更新和卸载功能，Agent 可直接调用：
+
+### 更新 skill
+
+```bash
+python3 ~/.openclaw/skills/switch-model/scripts/update-skill.py
+```
+
+- 自动备份当前版本到 `~/.openclaw/skills/switch-model.bak`
+- 优先使用 Git 拉取，失败时使用复制当前目录方式
+- 验证关键文件完整性后完成更新
+
+### 卸载 skill
+
+```bash
+# 普通卸载（会询问确认）
+python3 ~/.openclaw/skills/switch-model/scripts/uninstall-skill.py
+
+# 强制卸载（跳过确认，用于自动化流程）
+python3 ~/.openclaw/skills/switch-model/scripts/uninstall-skill.py --force
+```
+
+- 移除 `~/.openclaw/skills/switch-model` 目录
+- 备份目录 `~/.openclaw/skills/switch-model.bak` 保留不动
 
 ---
 

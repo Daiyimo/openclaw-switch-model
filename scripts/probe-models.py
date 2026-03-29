@@ -11,9 +11,14 @@ probe-models.py — 对 openclaw.json 中每个配置的模型发送最小化 AP
   provider/modelId\tOK\t模型名称
   provider/modelId\tFAIL\t模型名称\t失败原因
 
+支持的 API 类型（根据 provider.api 字段）：
+  - anthropic-messages: POST /v1/messages (Anthropic 兼容)
+  - openai-completions: POST /v1/chat/completions (OpenAI 兼容)
+  - openai-chatCompletions: POST /v1/chat/completions (OpenAI Chat 兼容)
+  - openai: POST /v1/completions (OpenAI 旧兼容)
+
 探针策略：
-  - anthropic-messages API: POST /messages, max_tokens=1, content="Hi"
-  - openai-completions API: POST /chat/completions, max_tokens=1, content="Hi"
+  - max_tokens=1，内容为 "Hi"，最小化请求
   - 超时 10 秒，避免长时间阻塞
   - 仅读取 baseUrl、api、apiKey/authHeader 等连接字段，不读取其他配置
 
@@ -59,6 +64,46 @@ def get_auth_token(config):
         return None
 
 
+def get_api_endpoint(api_type):
+    """根据 API 类型返回对应的端点路径"""
+    endpoints = {
+        "anthropic-messages": "/v1/messages",
+        "openai-completions": "/v1/chat/completions",
+        "openai-chatCompletions": "/v1/chat/completions",
+        "openai": "/v1/completions",
+    }
+    return endpoints.get(api_type, "/v1/chat/completions")
+
+
+def get_request_body(api_type, model_id, probe_content="Hi"):
+    """根据 API 类型返回对应的请求体"""
+    base_body = {
+        "model": model_id,
+        "max_tokens": 1,
+        "messages": [{"role": "user", "content": probe_content}]
+    }
+
+    if api_type == "openai":
+        # OpenAI 旧兼容 API 使用 prompt 而非 messages
+        return {
+            "model": model_id,
+            "max_tokens": 1,
+            "prompt": probe_content
+        }
+    return base_body
+
+
+def get_extra_headers(api_type, base_url):
+    """根据 API 类型返回额外的请求头"""
+    extra = {}
+    if api_type == "anthropic-messages":
+        extra["anthropic-version"] = "2023-06-01"
+        # Anthropic 原生 API 需要 x-api-key
+        if "anthropic.com" in base_url:
+            extra["x-api-key"] = "placeholder"  # 实际会在 build_headers_and_body 中替换
+    return extra
+
+
 def build_headers_and_body(provider_name, provider_cfg, model_id, config):
     """
     根据 provider 配置构建请求头和请求体。
@@ -96,39 +141,24 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
         headers["Authorization"] = "Bearer " + gw_token
         gw_port = config.get("gateway", {}).get("port", 18789)
         base_url = "http://127.0.0.1:" + str(gw_port) + "/v1"
-        # 继续往下构建真实 API 探针请求体（gateway 代理会注入真实 key 再转发）
     elif api_key:
         headers["Authorization"] = "Bearer " + api_key
     else:
         # 无鉴权信息，无法探测
         return None
 
-    # 若 provider 有专用 auth-profile 配置，读取对应 api_key
-    # （此处仅使用已在 provider 层声明的 apiKey，不深入 profiles）
-
     # --- 构建请求体和 URL ---
-    if api_type == "anthropic-messages":
-        # Anthropic Messages API
-        # 某些 provider（如 minimax）也支持 anthropic-compatible endpoint
-        url = base_url + "/messages"
-        body = {
-            "model": api_model_id,
-            "max_tokens": 1,
-            "messages": [{"role": "user", "content": "Hi"}]
-        }
-        # Anthropic 原生 API 需要 x-api-key 头而非 Authorization
-        if "anthropic.com" in base_url:
-            del headers["Authorization"]
-            headers["x-api-key"] = api_key
-            headers["anthropic-version"] = "2023-06-01"
-    else:
-        # OpenAI-compatible completions
-        url = base_url + "/chat/completions"
-        body = {
-            "model": api_model_id,
-            "max_tokens": 1,
-            "messages": [{"role": "user", "content": "Hi"}]
-        }
+    endpoint = get_api_endpoint(api_type)
+    url = base_url + endpoint
+    body = get_request_body(api_type, api_model_id)
+
+    # 根据 API 类型添加额外 headers
+    extra_headers = get_extra_headers(api_type, base_url)
+    if extra_headers.get("x-api-key"):
+        # 替换为实际 api_key
+        headers["x-api-key"] = api_key
+        del extra_headers["x-api-key"]
+    headers.update(extra_headers)
 
     return url, headers, json.dumps(body).encode("utf-8")
 

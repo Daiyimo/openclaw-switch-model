@@ -1,10 +1,17 @@
 ---
 name: switch-model
 description: 切换当前使用的 AI 模型。当用户想切换模型、选择不同的 AI 提供商、查看可用模型列表、询问当前用的哪个模型、测试模型是否正常时触发。
-version: 1.0.0
+version: 1.1.0
 homepage: https://github.com/Daiyimo/openclaw-switch-model
 user-invocable: true
 metadata: {"openclaw":{"emoji":"🔀","requires":{"config":["models"]}}}
+agent-invocable-commands:
+  - "更新 switch-model"
+  - "更新这个 skill"
+  - "升级 switch-model"
+  - "卸载 switch-model"
+  - "删除 switch-model"
+  - "移除 switch-model"
 ---
 
 # switch-model — AI 模型切换助手
@@ -161,3 +168,55 @@ python3 "{baseDir}/scripts/reload-gateway.py"
 - 写操作仅修改 `agents.defaults.model.primary` 一个字段，不影响其他配置
 - `agents.defaults.model.primary` 变更属于热重载范畴，通常无需完整重启
 - 对于走 openclaw gateway 代理的 provider（如 minimax），探针请求会通过 gateway 转发，可准确检测真实 Key 有效性
+
+---
+
+## Agent 维护命令
+
+### 更新 switch-model
+
+当用户说"更新 switch-model"、"升级这个 skill"等时触发。
+
+运行更新脚本：
+
+```bash
+python3 "{baseDir}/scripts/update-skill.py"
+```
+
+**流程**：
+1. 自动备份当前版本到 `~/.openclaw/skills/switch-model.bak`
+2. 优先使用 Git 拉取最新代码
+3. Git 失败时，使用复制当前目录方式更新
+4. 验证关键文件完整性
+
+**向用户说明**：
+- 更新前告知："正在更新 switch-model 到最新版本，请稍候……"
+- 成功时："✅ switch-model 已更新到最新版本"
+- 失败时："⚠️ 更新失败，已恢复原版本：[原因]"
+
+---
+
+### 卸载 switch-model
+
+当用户说"卸载 switch-model"、"删除这个 skill"等时触发。
+
+运行卸载脚本：
+
+```bash
+python3 "{baseDir}/scripts/uninstall-skill.py"
+```
+
+如需强制卸载（跳过确认）：
+
+```bash
+python3 "{baseDir}/scripts/uninstall-skill.py" --force
+```
+
+**流程**：
+1. 确认用户意图（除非 --force）
+2. 移除 `~/.openclaw/skills/switch-model` 目录
+3. 保留备份目录于 `~/.openclaw/skills/switch-model.bak`
+
+**向用户说明**：
+- 确认时："确定要卸载 switch-model 吗？卸载后将无法使用 /switch-model 命令。"
+- 成功时："✅ switch-model 已卸载完成"
