@@ -128,18 +128,14 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
     # 优先使用 provider 配置的 apiKey
     api_key = provider_cfg.get("apiKey", "")
 
-    # 若 authHeader=true，则使用 openclaw gateway token 作为鉴权
-    # （适用于 minimax 等走 openclaw 本地代理的 provider）
+    # authHeader=true：需通过本地 gateway 代理探测（gateway 会注入真实 key）
     use_auth_header = provider_cfg.get("authHeader", False)
     if use_auth_header:
-        # authHeader 模式：请求需经过本地 openclaw gateway 代理转发
-        # gateway 会注入真实的 provider key，因此必须通过 gateway 发探针才能检测 key 是否有效
-        # 用 gateway token 作为鉴权头，将请求发到 gateway 的 /v1 端点
         gw_token = get_auth_token(config)
-        if not gw_token:
-            return None  # 无 gateway token，无法代理探测
+        gw_port = config.get("gateway", {}).get("port")
+        if not gw_token or not gw_port:
+            return None  # 无 gateway token 或 port，无法代理探测
         headers["Authorization"] = "Bearer " + gw_token
-        gw_port = config.get("gateway", {}).get("port", 18789)
         base_url = "http://127.0.0.1:" + str(gw_port) + "/v1"
     elif api_key:
         headers["Authorization"] = "Bearer " + api_key
