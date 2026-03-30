@@ -65,14 +65,14 @@ def get_auth_token(config):
 
 
 def get_api_endpoint(api_type):
-    """根据 API 类型返回对应的端点路径"""
+    """根据 API 类型返回对应的端点路径（不含 /v1 前缀，因为 baseUrl 已包含）"""
     endpoints = {
-        "anthropic-messages": "/v1/messages",
-        "openai-completions": "/v1/chat/completions",
-        "openai-chatCompletions": "/v1/chat/completions",
-        "openai": "/v1/completions",
+        "anthropic-messages": "/messages",
+        "openai-completions": "/chat/completions",
+        "openai-chatCompletions": "/chat/completions",
+        "openai": "/completions",
     }
-    return endpoints.get(api_type, "/v1/chat/completions")
+    return endpoints.get(api_type, "/chat/completions")
 
 
 def get_request_body(api_type, model_id, probe_content="Hi"):
@@ -133,6 +133,7 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
         if not gw_token or not gw_port:
             return None  # 无 gateway token 或 port，无法代理探测
         headers["Authorization"] = "Bearer " + gw_token
+        # gateway 本地代理用固定路径，加上 /v1 前缀
         base_url = "http://127.0.0.1:" + str(gw_port) + "/v1"
     elif api_key:
         headers["Authorization"] = "Bearer " + api_key
