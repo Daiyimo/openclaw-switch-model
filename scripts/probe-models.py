@@ -11,14 +11,9 @@ probe-models.py — 对 openclaw.json 中每个配置的模型发送最小化 AP
   provider/modelId\tOK\t模型名称
   provider/modelId\tFAIL\t模型名称\t失败原因
 
-支持的 API 类型（根据 provider.api 字段）：
-  - anthropic-messages: POST /v1/messages (Anthropic 兼容)
-  - openai-completions: POST /v1/chat/completions (OpenAI 兼容)
-  - openai-chatCompletions: POST /v1/chat/completions (OpenAI Chat 兼容)
-  - openai: POST /v1/completions (OpenAI 旧兼容)
-
 探针策略：
-  - max_tokens=1，内容为 "Hi"，最小化请求
+  - anthropic-messages API: POST /messages, max_tokens=1, content="Hi"
+  - openai-completions API: POST /chat/completions, max_tokens=1, content="Hi"
   - 超时 10 秒，避免长时间阻塞
   - 仅读取 baseUrl、api、apiKey/authHeader 等连接字段，不读取其他配置
 
@@ -64,43 +59,6 @@ def get_auth_token(config):
         return None
 
 
-def get_api_endpoint(api_type):
-    """根据 API 类型返回对应的端点路径（不含 /v1 前缀，因为 baseUrl 已包含）"""
-    endpoints = {
-        "anthropic-messages": "/messages",
-        "openai-completions": "/chat/completions",
-        "openai-chatCompletions": "/chat/completions",
-        "openai": "/completions",
-    }
-    return endpoints.get(api_type, "/chat/completions")
-
-
-def get_request_body(api_type, model_id, probe_content="Hi"):
-    """根据 API 类型返回对应的请求体"""
-    base_body = {
-        "model": model_id,
-        "max_tokens": 1,
-        "messages": [{"role": "user", "content": probe_content}]
-    }
-
-    if api_type == "openai":
-        # OpenAI 旧兼容 API 使用 prompt 而非 messages
-        return {
-            "model": model_id,
-            "max_tokens": 1,
-            "prompt": probe_content
-        }
-    return base_body
-
-
-def get_extra_headers(api_type):
-    """根据 API 类型返回额外的请求头（不含鉴权信息，鉴权由调用方统一处理）"""
-    extra = {}
-    if api_type == "anthropic-messages":
-        extra["anthropic-version"] = "2023-06-01"
-    return extra
-
-
 def build_headers_and_body(provider_name, provider_cfg, model_id, config):
     """
     根据 provider 配置构建请求头和请求体。
@@ -113,27 +71,21 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
     if not base_url:
         return None
 
-    # 发给 API 的 model 字段：若 model_id 带有 "provider_name/" 前缀，则去掉
-    # 例如 stepfun 配置 id="stepfun/step-3.5-flash"，但 API 需要 "step-3.5-flash"
-    api_model_id = model_id
-    if api_model_id.startswith(provider_name + "/"):
-        api_model_id = api_model_id[len(provider_name) + 1:]
-
     # --- 构建鉴权头 ---
     headers = {"Content-Type": "application/json"}
 
     # 优先使用 provider 配置的 apiKey
     api_key = provider_cfg.get("apiKey", "")
 
-    # authHeader=true：需通过本地 gateway 代理探测（gateway 会注入真实 key）
+    # 若 authHeader=true，则通过本地 openclaw gateway 代理探测
+    # （适用于 minimax 等 provider，gateway 会注入真实 key 再转发）
     use_auth_header = provider_cfg.get("authHeader", False)
     if use_auth_header:
         gw_token = get_auth_token(config)
-        gw_port = config.get("gateway", {}).get("port")
-        if not gw_token or not gw_port:
-            return None  # 无 gateway token 或 port，无法代理探测
+        if not gw_token:
+            return None  # 无 gateway token，无法代理探测
         headers["Authorization"] = "Bearer " + gw_token
-        # gateway 本地代理用固定路径，加上 /v1 前缀
+        gw_port = config.get("gateway", {}).get("port", 18789)
         base_url = "http://127.0.0.1:" + str(gw_port) + "/v1"
     elif api_key:
         headers["Authorization"] = "Bearer " + api_key
@@ -141,18 +93,36 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
         # 无鉴权信息，无法探测
         return None
 
+    # 发给 API 的 model 字段：
+    # - authHeader 模式（gateway 代理）：保留 full id（如 "minimax/MiniMax-M2.5"），gateway 依靠此字段路由
+    # - 直连模式：去掉 provider 前缀（如 "stepfun/step-3.5-flash" → "step-3.5-flash"），直接发给上游 API
+    api_model_id = model_id
+    if not use_auth_header and api_model_id.startswith(provider_name + "/"):
+        api_model_id = api_model_id[len(provider_name) + 1:]
+
     # --- 构建请求体和 URL ---
-    endpoint = get_api_endpoint(api_type)
-    url = base_url + endpoint
-    body = get_request_body(api_type, api_model_id)
-
-    # 根据 API 类型添加额外 headers
-    extra_headers = get_extra_headers(api_type)
-    headers.update(extra_headers)
-
-    # Anthropic 原生 API 还需要 x-api-key header（与 Authorization 并存）
-    if api_type == "anthropic-messages" and "anthropic.com" in base_url and api_key:
-        headers["x-api-key"] = api_key
+    if api_type == "anthropic-messages":
+        # Anthropic Messages API
+        # 某些 provider（如 minimax）也支持 anthropic-compatible endpoint
+        url = base_url + "/messages"
+        body = {
+            "model": api_model_id,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "Hi"}]
+        }
+        # Anthropic 原生 API 需要 x-api-key 头而非 Authorization
+        if "anthropic.com" in base_url:
+            del headers["Authorization"]
+            headers["x-api-key"] = api_key
+            headers["anthropic-version"] = "2023-06-01"
+    else:
+        # OpenAI-compatible completions
+        url = base_url + "/chat/completions"
+        body = {
+            "model": api_model_id,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "Hi"}]
+        }
 
     return url, headers, json.dumps(body).encode("utf-8")
 
@@ -180,9 +150,9 @@ def probe_one(full_id, model_name, provider_name, provider_cfg, model_id, config
                         msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
                         return (full_id, False, model_name, "API 错误: " + msg[:120])
                 except json.JSONDecodeError:
-                    pass  # 响应体不是 JSON（正常情况），视为成功
+                    pass  # 响应体不是 JSON，视为成功
                 except (KeyError, TypeError):
-                    pass  # JSON 结构不符合预期，无法提取 error 字段，视为成功
+                    pass  # JSON 结构不符合预期，视为成功
                 return (full_id, True, model_name, "")
             else:
                 return (full_id, False, model_name, "HTTP " + str(status))
