@@ -61,7 +61,29 @@ AI: ✅ 已从 Step 3.5 Flash（stepfun/step-3.5-flash）
 
 ## 安装
 
-### 方式一：手动安装（推荐）
+### 方式零：Agent 一键安装（最省心）
+
+复制这句话给你的 AI Agent（OpenClaw、Claude Code、Cursor 等）：
+
+```
+帮我安装 switch-model：https://raw.githubusercontent.com/Daiyimo/openclaw-switch-model/main/docs/install.md
+```
+
+Agent 会自动完成克隆、验证和冒烟测试，几步搞定。
+
+> 🔄 **已装过？更新也是一句话：**
+> ```
+> 帮我更新 switch-model：https://raw.githubusercontent.com/Daiyimo/openclaw-switch-model/main/docs/update.md
+> ```
+
+> 🗑️ **想卸载？同样一句话：**
+> ```
+> 帮我卸载 switch-model：https://raw.githubusercontent.com/Daiyimo/openclaw-switch-model/main/docs/uninstall.md
+> ```
+
+---
+
+### 方式一：手动安装
 
 将本仓库克隆或下载到 OpenClaw skills 目录：
 
@@ -107,9 +129,15 @@ switch-model/
 
 ## Agent 一键维护命令
 
-面向 Agent 的更新和卸载功能，Agent 可直接调用：
-
 ### 更新 skill
+
+复制给 Agent（推荐）：
+
+```
+帮我更新 switch-model：https://raw.githubusercontent.com/Daiyimo/openclaw-switch-model/main/docs/update.md
+```
+
+或直接调用脚本：
 
 ```bash
 python3 ~/.openclaw/skills/switch-model/scripts/update-skill.py
@@ -120,6 +148,14 @@ python3 ~/.openclaw/skills/switch-model/scripts/update-skill.py
 - 验证关键文件完整性后完成更新
 
 ### 卸载 skill
+
+复制给 Agent（推荐）：
+
+```
+帮我卸载 switch-model：https://raw.githubusercontent.com/Daiyimo/openclaw-switch-model/main/docs/uninstall.md
+```
+
+或直接调用脚本：
 
 ```bash
 # 普通卸载（会询问确认）

@@ -93,14 +93,11 @@ def get_request_body(api_type, model_id, probe_content="Hi"):
     return base_body
 
 
-def get_extra_headers(api_type, base_url):
-    """根据 API 类型返回额外的请求头"""
+def get_extra_headers(api_type):
+    """根据 API 类型返回额外的请求头（不含鉴权信息，鉴权由调用方统一处理）"""
     extra = {}
     if api_type == "anthropic-messages":
         extra["anthropic-version"] = "2023-06-01"
-        # Anthropic 原生 API 需要 x-api-key
-        if "anthropic.com" in base_url:
-            extra["x-api-key"] = "placeholder"  # 实际会在 build_headers_and_body 中替换
     return extra
 
 
@@ -149,12 +146,12 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
     body = get_request_body(api_type, api_model_id)
 
     # 根据 API 类型添加额外 headers
-    extra_headers = get_extra_headers(api_type, base_url)
-    if extra_headers.get("x-api-key"):
-        # 替换为实际 api_key
-        headers["x-api-key"] = api_key
-        del extra_headers["x-api-key"]
+    extra_headers = get_extra_headers(api_type)
     headers.update(extra_headers)
+
+    # Anthropic 原生 API 还需要 x-api-key header（与 Authorization 并存）
+    if api_type == "anthropic-messages" and "anthropic.com" in base_url and api_key:
+        headers["x-api-key"] = api_key
 
     return url, headers, json.dumps(body).encode("utf-8")
 
@@ -171,18 +168,20 @@ def probe_one(full_id, model_name, provider_name, provider_cfg, model_id, config
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as resp:
             status = resp.status
-            resp_body = resp.read(512).decode("utf-8", errors="replace")
+            resp_body = resp.read().decode("utf-8", errors="replace")
             # 2xx 均视为成功；某些 provider 返回 200 但 body 含 error 字段
             if 200 <= status < 300:
                 # 检查 body 中是否有明确的 error 字段
                 try:
-                    resp_json = json.loads(resp_body + resp.read().decode("utf-8", errors="replace"))
+                    resp_json = json.loads(resp_body)
                     if "error" in resp_json:
                         err = resp_json["error"]
                         msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
                         return (full_id, False, model_name, "API 错误: " + msg[:120])
-                except Exception:
-                    pass
+                except json.JSONDecodeError:
+                    pass  # 响应体不是 JSON（正常情况），视为成功
+                except (KeyError, TypeError):
+                    pass  # JSON 结构不符合预期，无法提取 error 字段，视为成功
                 return (full_id, True, model_name, "")
             else:
                 return (full_id, False, model_name, "HTTP " + str(status))
