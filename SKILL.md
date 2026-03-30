@@ -107,38 +107,28 @@ python3 "{baseDir}/scripts/probe-models.py"
 
 ---
 
-### 第五步：写入配置
+### 第五步：重启 gateway 并应用配置
 
-确认目标模型 ID 后，运行：
+确认目标模型 ID 后，运行以下脚本执行完整的 stop/config/start 流程（需要 sudo 权限）：
 
 ```bash
-python3 "{baseDir}/scripts/set-model.py" "TARGET_MODEL_ID"
+python3 "{baseDir}/scripts/reload-gateway.py" "TARGET_MODEL_ID"
 ```
 
 将 `TARGET_MODEL_ID` 替换为实际的模型 ID 字符串（如 `stepfun/step-3.5-flash`）。
 
-- 输出 `OK` → 继续第六步
-- 输出 `ERROR:...` → 告知写入失败，停止，**不执行重启**
-
----
-
-### 第六步：等待 gateway hot reload 完成
-
-写入配置后，gateway 会**自动**检测到文件变更并触发 hot reload，无需手动干预。运行以下脚本等待其完成并确认恢复：
-
-```bash
-python3 "{baseDir}/scripts/reload-gateway.py"
-```
-
-> ⚠️ **不要在此之前或之后额外执行任何 reload/restart 命令**，gateway 已在自动处理，重复触发反而会造成多次掉线。
+脚本会执行以下步骤：
+1. `sudo openclaw gateway stop` - 停止 gateway
+2. `sudo openclaw config set agents.defaults.model.primary TARGET_MODEL_ID` - 设置新模型
+3. `sudo openclaw gateway start` - 启动 gateway
+4. 等待 gateway 恢复正常（最多 15 秒）
 
 根据输出给出对应反馈：
 
 | 输出 | 含义 | 向用户说明 |
 |------|------|-----------|
-| `HOT_RELOAD` | gateway 已自动完成 hot reload 并恢复正常 | "✅ 配置已生效，对话已恢复正常" |
-| `RESTARTED` | hot reload 异常，已兜底完整重启并恢复 | "✅ gateway 已重启恢复，对话正常" |
-| `FAILED:...` | 重启也失败了 | "⚠️ gateway 未能恢复：[原因]。请手动执行 `openclaw gateway restart`" |
+| `RESTARTED` | gateway 已成功重启并恢复正常 | "✅ 已从 [旧模型] 切换到 [新模型]，gateway 已恢复" |
+| `FAILED:...` | gateway 重启失败 | "⚠️ gateway 重启失败：[原因]。请手动执行 `sudo openclaw gateway start`" |
 
 ---
 
@@ -150,13 +140,10 @@ python3 "{baseDir}/scripts/reload-gateway.py"
 ✅ 已从 [旧模型名]（[旧模型ID]）切换到 [新模型名]（[新模型ID]），继续吧！
 ```
 
----
-
 ## 边界情况处理
 
 - **probe-models.py 执行超时或崩溃**：告知用户探测失败，**不继续切换流程**，建议检查网络后重试
-- **set-model.py 写入失败**：告知具体错误，不执行 reload
-- **reload-gateway.py 执行失败**：告知配置已写入但 gateway 未重载，提示手动执行 `openclaw gateway restart`
+- **reload-gateway.py 执行失败**：告知配置更新失败，提示手动执行 `sudo openclaw gateway stop && sudo openclaw config set agents.defaults.model.primary <model_id> && sudo openclaw gateway start`
 - **没有任何模型配置**：提示用户在 `openclaw.json` 的 `models.providers` 中添加模型
 
 ---
@@ -165,9 +152,8 @@ python3 "{baseDir}/scripts/reload-gateway.py"
 
 - 本 skill 探测模型时仅发送 `max_tokens=1` 的最小请求，不产生有效对话内容
 - API Key 在内存中使用，不会被输出、记录或外传
-- 写操作仅修改 `agents.defaults.model.primary` 一个字段，不影响其他配置
-- `agents.defaults.model.primary` 变更属于热重载范畴，通常无需完整重启
-- 对于走 openclaw gateway 代理的 provider（如 minimax），探针请求会通过 gateway 转发，可准确检测真实 Key 有效性
+- `reload-gateway.py` 需要 sudo 权限执行 gateway 启停和配置命令
+- 重启 gateway 通常需要 5-15 秒，期间会短暂中断服务
 
 ---
 

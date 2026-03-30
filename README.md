@@ -10,7 +10,7 @@
 - 🔑 **Key 有效性检测**：能识别 Key 过期（401/403）、模型不可用（404）、配额超限（429）等具体原因
 - 🛡️ **切换保护**：Key 失效或模型不可用时直接拒绝切换，避免 OpenClaw 因切换到不可用模型而崩溃
 - 🌐 **代理模式支持**：对走 OpenClaw gateway 代理的 provider（如 MiniMax），通过 gateway 转发探针，准确检测真实 Key 状态
-- ♻️ **热重载**：写入配置后自动触发 gateway 热重载，`model.primary` 变更无需完整重启即可生效
+- ♻️ **完整重启**：使用 sudo 权限执行 stop/config/start 流程确保配置可靠生效
 - 🖥️ **跨平台**：兼容 Windows / macOS / Linux，Python 3 标准库实现，无需额外依赖
 - 🤝 **多 Provider 兼容**：支持 Claude、GLM、MiniMax、Stepfun、OpenRouter 等任意在 `openclaw.json` 中配置的模型
 - 🔄 **一键更新**：Agent 可调用更新脚本自动拉取最新版本，支持 Git 拉取和目录复制两种方式
@@ -54,7 +54,7 @@ AI: 🔍 模型检测完成：
 
 AI: ✅ 已从 Step 3.5 Flash（stepfun/step-3.5-flash）
       切换到 Step 3.5 Flash Free（openrouter/stepfun/step-3.5-flash:free）
-      配置已热重载，当前对话即刻生效，继续吧！
+      gateway 已重启恢复，继续吧！
 ```
 
 ---
@@ -119,8 +119,7 @@ switch-model/
 └── scripts/
     ├── list-models.py         # 读取 openclaw.json 中的模型列表和当前 primary 模型
     ├── probe-models.py        # 对每个模型发探针请求，检测连通性和 Key 有效性
-    ├── set-model.py           # 将目标模型 ID 写入 agents.defaults.model.primary
-    ├── reload-gateway.py      # 等待 gateway 自动 hot reload 完成并确认恢复（不主动触发）
+    ├── reload-gateway.py      # 使用 sudo 执行 stop/config/start 重启 gateway 并等待恢复
     ├── update-skill.py        # 一键更新 skill 到最新版本（面向 Agent）
     └── uninstall-skill.py     # 一键卸载 skill（面向 Agent）
 ```
@@ -194,9 +193,9 @@ python3 ~/.openclaw/skills/switch-model/scripts/uninstall-skill.py --force
 ## 安全说明
 
 - **API Key 不输出**：Key 仅在内存中用于构造请求头，不会被打印、记录或传到任何第三方
-- **最小写权限**：`set-model.py` 仅修改 `agents.defaults.model.primary` 一个字段，不触碰其他配置
-- **无外部网络请求**：所有网络请求仅发向 provider 配置的 `baseUrl`，`reload-gateway.py` 仅调用本机 `localhost`
-- **原子写入**：配置文件通过临时文件 + `os.replace()` 原子替换，避免写入中断损坏原文件
+- **最小写权限**：`reload-gateway.py` 通过 sudo 执行 config 命令，仅修改 `agents.defaults.model.primary` 一个字段
+- **无外部网络请求**：所有网络请求仅发向 provider 配置的 `baseUrl`，`reload-gateway.py` 仅调用本机 `localhost` 健康检查
+- **原子操作**：stop/config/start 流程确保 gateway 一致性，避免部分更新导致的不一致状态
 
 ---
 

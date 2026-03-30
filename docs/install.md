@@ -79,7 +79,6 @@ git clone https://github.com/Daiyimo/openclaw-switch-model `
 ls ~/.openclaw/skills/switch-model/SKILL.md
 ls ~/.openclaw/skills/switch-model/scripts/list-models.py
 ls ~/.openclaw/skills/switch-model/scripts/probe-models.py
-ls ~/.openclaw/skills/switch-model/scripts/set-model.py
 ls ~/.openclaw/skills/switch-model/scripts/reload-gateway.py
 
 # Windows（PowerShell）
