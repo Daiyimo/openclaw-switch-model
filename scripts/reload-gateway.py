@@ -31,8 +31,12 @@ import urllib.error
 
 # Windows 下强制 stdout/stderr 使用 UTF-8，避免中文乱码
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    else:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 CONFIG_PATH = os.path.expanduser("~/.openclaw/openclaw.json")
 HEALTH_TIMEOUT = 3       # 单次 /health 请求超时秒数
@@ -90,6 +94,10 @@ def run_cmd(cmd_list):
         return False, "", "命令执行超时"
     except FileNotFoundError:
         return False, "", "找不到 openclaw 命令，请确认 openclaw CLI 已安装并在 PATH 中"
+    except PermissionError:
+        return False, "", "权限不足，请确认已配置 sudo 权限"
+    except OSError as e:
+        return False, "", "系统错误: " + str(e)
     except Exception as e:
         return False, "", str(e)
 

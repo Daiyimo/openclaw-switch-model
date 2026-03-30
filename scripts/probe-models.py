@@ -14,12 +14,12 @@ probe-models.py — 对 openclaw.json 中每个配置的模型发送最小化 AP
 探针策略：
   - anthropic-messages API: POST /messages, max_tokens=1, content="Hi"
   - openai-completions API: POST /chat/completions, max_tokens=1, content="Hi"
-  - 超时 10 秒，避免长时间阻塞
+  - 超时 30 秒，避免长时间阻塞
   - 仅读取 baseUrl、api、apiKey/authHeader 等连接字段，不读取其他配置
 
 安全说明：
   - API Key 仅用于构造鉴权请求头，不输出、不记录、不外传
-  - 网络请求仅发送到 provider 配置的 baseUrl，不访问第三方地址
+  - 网络请求仅发送到 provider 配置的 baseUrl 或本地网关，不访问第三方地址
 退出码：0 所有模型均可用，1 至少一个失败，2 配置读取失败
 """
 
@@ -32,11 +32,33 @@ import urllib.error
 
 # Windows 下强制 stdout/stderr 使用 UTF-8，避免中文乱码
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    else:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 CONFIG_PATH = os.path.expanduser("~/.openclaw/openclaw.json")
 PROBE_TIMEOUT = 30  # 秒（免费模型如 openrouter 可能响应较慢）
+
+
+def check_gateway_health(port, token):
+    """前置检查：网关是否可用"""
+    url = "http://127.0.0.1:" + str(port) + "/health"
+    headers = {}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return resp.status == 200, None
+    except urllib.error.HTTPError as e:
+        return False, "网关健康检查返回 HTTP " + str(e.code)
+    except urllib.error.URLError as e:
+        return False, "无法连接到网关: " + str(e.reason)
+    except Exception as e:
+        return False, "网关检查异常: " + str(e)
 
 
 def load_config():
@@ -62,9 +84,10 @@ def get_auth_token(config):
 def build_headers_and_body(provider_name, provider_cfg, model_id, config):
     """
     根据 provider 配置构建请求头和请求体。
-    返回 (url, headers_dict, body_bytes) 或 None（如果无法构建）。
+    返回 (url, headers_dict, body_bytes, error_msg)，
+    如果 error_msg 不为 None 表示无法构建请求。
     API Key 仅在内存中使用，不输出。
-    
+
     关键点：
     - baseUrl 应该是完整的 API 端点 URL（包含路径），不进行端点拼接
     - authHeader=true：通过本地 gateway 代理，使用 gateway token 而非 provider key
@@ -74,13 +97,10 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
     api_type = provider_cfg.get("api", "openai-completions")
 
     if not base_url:
-        return None
+        return None, None, None, "缺少 baseUrl 配置"
 
     # --- 构建鉴权头 ---
     headers = {"Content-Type": "application/json"}
-
-    # 优先使用 provider 配置的 apiKey
-    api_key = provider_cfg.get("apiKey", "")
 
     # 若 authHeader=true，则通过本地 openclaw gateway 代理探测
     # （适用于 minimax 等 provider，gateway 会注入真实 key 再转发）
@@ -88,17 +108,18 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
     if use_auth_header:
         gw_token = get_auth_token(config)
         if not gw_token:
-            return None  # 无 gateway token，无法代理探测
+            return None, None, None, "网关未配置 token（gateway.auth.token 缺失），无法通过网关代理探测"
         headers["Authorization"] = "Bearer " + gw_token
         gw_port = config.get("gateway", {}).get("port", 18789)
         # 重要：通过 gateway 代理时，baseUrl 被替换为 localhost gateway 地址
         # gateway 会根据 model id 中的 provider 前缀进行路由
         base_url = "http://127.0.0.1:" + str(gw_port) + "/v1"
-    elif api_key:
-        headers["Authorization"] = "Bearer " + api_key
     else:
-        # 无鉴权信息，无法探测
-        return None
+        # 直连模式：使用 provider 配置的 apiKey
+        api_key = provider_cfg.get("apiKey", "")
+        if not api_key:
+            return None, None, None, "未配置 apiKey 且未启用网关代理（authHeader=false）"
+        headers["Authorization"] = "Bearer " + api_key
 
     # 发给 API 的 model 字段：
     # - authHeader 模式（gateway 代理）：保留 full id（如 "minimax/MiniMax-M2.5"），gateway 依靠此字段路由
@@ -108,14 +129,8 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
         api_model_id = api_model_id[len(provider_name) + 1:]
 
     # --- 构建请求体和 URL ---
-    # baseUrl 应该是完整的 API 端点 URL，不再进行拼接
-    # 例如：
-    #   - https://api.minimax.chat/v1/anthropic/messages (for minimax)
-    #   - https://openrouter.ai/api/v1/chat/completions (for openrouter)
-    #   - https://api.stepfun.com/v1/chat/completions (for stepfun)
-    
     url = base_url
-    
+
     # 构建请求体（根据 API 类型选择字段）
     if api_type == "anthropic-messages":
         body = {
@@ -123,11 +138,11 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
             "max_tokens": 1,
             "messages": [{"role": "user", "content": "Hi"}]
         }
-        # Anthropic 原生 API 需要 x-api-key 头而非 Authorization
-        if "anthropic.com" in base_url:
+        # Anthropic 原生 API 需要 x-api-key 头而非 Authorization（仅直连模式）
+        if "anthropic.com" in base_url and not use_auth_header:
             if "Authorization" in headers:
                 del headers["Authorization"]
-            headers["x-api-key"] = api_key
+            headers["x-api-key"] = provider_cfg.get("apiKey", "")
             headers["anthropic-version"] = "2023-06-01"
     else:
         # OpenAI-compatible completions
@@ -137,16 +152,14 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
             "messages": [{"role": "user", "content": "Hi"}]
         }
 
-    return url, headers, json.dumps(body).encode("utf-8")
+    return url, headers, json.dumps(body).encode("utf-8"), None
 
 
 def probe_one(full_id, model_name, provider_name, provider_cfg, model_id, config):
     """探测单个模型，返回 (full_id, True/False, model_name, reason)"""
-    result = build_headers_and_body(provider_name, provider_cfg, model_id, config)
-    if result is None:
-        return (full_id, False, model_name, "无法构建请求（缺少 baseUrl 或鉴权信息）")
-
-    url, headers, body = result
+    url, headers, body, error_msg = build_headers_and_body(provider_name, provider_cfg, model_id, config)
+    if error_msg:
+        return (full_id, False, model_name, error_msg)
 
     try:
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
@@ -163,9 +176,11 @@ def probe_one(full_id, model_name, provider_name, provider_cfg, model_id, config
                         msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
                         return (full_id, False, model_name, "API 错误: " + msg[:120])
                 except json.JSONDecodeError:
-                    pass  # 响应体不是 JSON，视为成功
+                    # 响应不是 JSON，发出警告但仍视为成功（某些 provider 返回纯文本）
+                    sys.stderr.write("[WARNING] 模型 " + full_id + " 响应非 JSON 格式，但仍视为成功\n")
                 except (KeyError, TypeError):
-                    pass  # JSON 结构不符合预期，视为成功
+                    # JSON 结构不符合预期，视为成功
+                    pass
                 return (full_id, True, model_name, "")
             else:
                 return (full_id, False, model_name, "HTTP " + str(status))
@@ -196,8 +211,9 @@ def probe_one(full_id, model_name, provider_name, provider_cfg, model_id, config
 def main():
     config = load_config()
 
-    # 解析 filter（可选）
-    filter_id = sys.argv[1].strip() if len(sys.argv) > 1 else None
+    # 解析 filter（可选）：空白字符串视为无过滤
+    filter_arg = sys.argv[1] if len(sys.argv) > 1 else ""
+    filter_id = filter_arg.strip() or None
 
     providers = {}
     try:
@@ -230,6 +246,20 @@ def main():
     if not tasks:
         sys.stderr.write("ERROR: 未找到任何模型配置\n")
         sys.exit(2)
+
+    # 前置检查：如果存在使用 authHeader 的 provider，先验证网关可用性
+    needs_gateway = any(
+        isinstance(p_cfg, dict) and p_cfg.get("authHeader", False)
+        for _, _, _, p_cfg, _ in tasks
+    )
+    if needs_gateway:
+        gw_port = config.get("gateway", {}).get("port", 18789)
+        gw_token = get_auth_token(config)
+        gw_ok, gw_err = check_gateway_health(gw_port, gw_token)
+        if not gw_ok:
+            sys.stderr.write("[WARNING] 网关健康检查失败: " + gw_err + "\n")
+            sys.stderr.write("  提示: 使用 authHeader=true 的 provider 依赖本地 gateway，请确认 gateway 正在运行\n")
+            sys.stderr.write("  可通过 `sudo openclaw gateway status` 查看状态\n")
 
     any_fail = False
     for full_id, model_name, provider_name, provider_cfg, model_id in tasks:

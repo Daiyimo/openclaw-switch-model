@@ -23,8 +23,12 @@ import sys
 
 # Windows 下强制 stdout/stderr 使用 UTF-8
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    else:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 SKILL_NAME = "switch-model"
 INSTALL_DIR = os.path.expanduser("~/.openclaw/skills/" + SKILL_NAME)
@@ -66,11 +70,22 @@ def backup_current():
 
 
 def restore_backup():
-    """恢复备份"""
-    if os.path.isdir(BACKUP_DIR) and os.path.isdir(INSTALL_DIR):
-        shutil.rmtree(INSTALL_DIR)
-        shutil.copytree(BACKUP_DIR, INSTALL_DIR)
-        log("已恢复备份")
+    """恢复备份（先完全删除安装目录，再复制）"""
+    if os.path.isdir(BACKUP_DIR):
+        if os.path.isdir(INSTALL_DIR):
+            try:
+                shutil.rmtree(INSTALL_DIR)
+            except Exception as e:
+                error("清理旧安装目录失败: " + str(e))
+                return False
+        try:
+            shutil.copytree(BACKUP_DIR, INSTALL_DIR)
+            log("已恢复备份")
+            return True
+        except Exception as e:
+            error("恢复备份失败: " + str(e))
+            return False
+    return False
 
 
 def validate_install(skill_dir):
@@ -105,17 +120,28 @@ def update_via_git():
             error("未找到 git 命令，请确认已安装 Git")
             return False
 
-    # 已有安装：尝试 git pull
+    # 已有安装：尝试 git pull（自动检测当前分支）
     log("正在拉取最新代码...")
     try:
+        # 获取当前分支名
+        branch_result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=INSTALL_DIR,
+            capture_output=True,
+            text=True,
+        )
+        branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "main"
+        if not branch:
+            branch = "main"
+
         result = subprocess.run(
-            ["git", "pull", "origin", "main"],
+            ["git", "pull", "origin", branch],
             cwd=INSTALL_DIR,
             capture_output=True,
             text=True,
         )
         if result.returncode == 0:
-            log("拉取成功")
+            log("拉取成功（分支: " + branch + "）")
             return True
         else:
             error("拉取失败: " + result.stderr)
@@ -163,7 +189,9 @@ def main():
     if not success:
         log("Git 更新失败，尝试使用复制方式...")
         # 先恢复备份，再复制
-        restore_backup()
+        if not restore_backup():
+            error("恢复备份失败，无法使用复制方式更新")
+            sys.exit(1)
         if not update_via_copy():
             error("复制方式也失败，已恢复备份")
             sys.exit(1)

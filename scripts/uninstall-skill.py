@@ -21,8 +21,12 @@ import sys
 
 # Windows 下强制 stdout/stderr 使用 UTF-8
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    else:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 SKILL_NAME = "switch-model"
 INSTALL_DIR = os.path.expanduser("~/.openclaw/skills/" + SKILL_NAME)
@@ -42,8 +46,8 @@ def confirm():
     try:
         answer = input("确定要卸载 " + SKILL_NAME + " 吗？(yes/no): ").strip().lower()
         return answer in ("yes", "y")
-    except EOFError:
-        # 非交互环境，默认 no
+    except (EOFError, KeyboardInterrupt, OSError):
+        # 非交互环境或用户中断，默认 no
         return False
 
 
