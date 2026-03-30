@@ -36,7 +36,7 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 CONFIG_PATH = os.path.expanduser("~/.openclaw/openclaw.json")
-PROBE_TIMEOUT = 10  # 秒
+PROBE_TIMEOUT = 30  # 秒（免费模型如 openrouter 可能响应较慢）
 
 
 def load_config():
@@ -64,6 +64,11 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
     根据 provider 配置构建请求头和请求体。
     返回 (url, headers_dict, body_bytes) 或 None（如果无法构建）。
     API Key 仅在内存中使用，不输出。
+    
+    关键点：
+    - baseUrl 应该是完整的 API 端点 URL（包含路径），不进行端点拼接
+    - authHeader=true：通过本地 gateway 代理，使用 gateway token 而非 provider key
+    - authHeader=false：直接使用 provider apiKey 进行请求
     """
     base_url = provider_cfg.get("baseUrl", "").rstrip("/")
     api_type = provider_cfg.get("api", "openai-completions")
@@ -86,6 +91,8 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
             return None  # 无 gateway token，无法代理探测
         headers["Authorization"] = "Bearer " + gw_token
         gw_port = config.get("gateway", {}).get("port", 18789)
+        # 重要：通过 gateway 代理时，baseUrl 被替换为 localhost gateway 地址
+        # gateway 会根据 model id 中的 provider 前缀进行路由
         base_url = "http://127.0.0.1:" + str(gw_port) + "/v1"
     elif api_key:
         headers["Authorization"] = "Bearer " + api_key
@@ -101,10 +108,16 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
         api_model_id = api_model_id[len(provider_name) + 1:]
 
     # --- 构建请求体和 URL ---
+    # baseUrl 应该是完整的 API 端点 URL，不再进行拼接
+    # 例如：
+    #   - https://api.minimax.chat/v1/anthropic/messages (for minimax)
+    #   - https://openrouter.ai/api/v1/chat/completions (for openrouter)
+    #   - https://api.stepfun.com/v1/chat/completions (for stepfun)
+    
+    url = base_url
+    
+    # 构建请求体（根据 API 类型选择字段）
     if api_type == "anthropic-messages":
-        # Anthropic Messages API
-        # 某些 provider（如 minimax）也支持 anthropic-compatible endpoint
-        url = base_url + "/messages"
         body = {
             "model": api_model_id,
             "max_tokens": 1,
@@ -112,12 +125,12 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
         }
         # Anthropic 原生 API 需要 x-api-key 头而非 Authorization
         if "anthropic.com" in base_url:
-            del headers["Authorization"]
+            if "Authorization" in headers:
+                del headers["Authorization"]
             headers["x-api-key"] = api_key
             headers["anthropic-version"] = "2023-06-01"
     else:
         # OpenAI-compatible completions
-        url = base_url + "/chat/completions"
         body = {
             "model": api_model_id,
             "max_tokens": 1,
