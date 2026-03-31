@@ -10,8 +10,8 @@
 - 🔑 **Key 有效性检测**：能识别 Key 过期（401/403）、模型不可用（404）、配额超限（429）等具体原因
 - 🛡️ **切换保护**：Key 失效或模型不可用时直接拒绝切换，避免 OpenClaw 因切换到不可用模型而崩溃
 - 🌐 **代理模式支持**：对走 OpenClaw gateway 代理的 provider（如 MiniMax），通过 gateway 转发探针，准确检测真实 Key 状态
-- ♻️ **完整重启**：使用 sudo 权限执行 stop/config/start 流程确保配置可靠生效
-- 🖥️ **跨平台**：兼容 Windows / macOS / Linux，Python 3 标准库实现，无需额外依赖
+- ♻️ **完整重启**：使用 sudo（Unix/Linux）或管理员权限（Windows）执行 stop/config/start 流程确保配置可靠生效
+- 🖥️ **跨平台**：兼容 Windows / macOS / Linux，Python 3 标准库实现，无需额外依赖（Windows 需要管理员权限）
 - 🤝 **多 Provider 兼容**：支持 Claude、GLM、MiniMax、Stepfun、OpenRouter 等任意在 `openclaw.json` 中配置的模型
 - 🔄 **一键更新**：Agent 可调用更新脚本自动拉取最新版本，支持 Git 拉取和目录复制两种方式
 - 🗑️ **一键卸载**：Agent 可调用卸载脚本完整移除 skill
@@ -115,11 +115,19 @@ openclaw skill validate switch-model
 
 ```
 switch-model/
+├── .gitattributes            # Git 配置：统一行尾符、二进制文件
+├── .gitignore                # Git 忽略：Python 缓存、临时文件
+├── LICENSE                   # MIT License 许可证
+├── README.md                 # 项目说明文档
 ├── SKILL.md                  # Skill 主入口，定义触发规则和执行流程
+├── docs/
+│   ├── install.md            # Agent 安装指南
+│   ├── uninstall.md          # Agent 卸载指南
+│   └── update.md             # Agent 更新指南
 └── scripts/
     ├── list-models.py         # 读取 openclaw.json 中的模型列表和当前 primary 模型
     ├── probe-models.py        # 对每个模型发探针请求，检测连通性和 Key 有效性
-    ├── reload-gateway.py      # 使用 sudo 执行 stop/config/start 重启 gateway 并等待恢复
+    ├── reload-gateway.py      # 使用 sudo（Unix）或管理员权限（Windows）执行 stop/config/start 重启 gateway
     ├── update-skill.py        # 一键更新 skill 到最新版本（面向 Agent）
     └── uninstall-skill.py     # 一键卸载 skill（面向 Agent）
 ```
@@ -187,15 +195,16 @@ python3 ~/.openclaw/skills/switch-model/scripts/uninstall-skill.py --force
 | OpenClaw | 任意版本，需已配置 `models.providers` |
 | Python | 3.6+（使用标准库，无需 pip 安装） |
 | 配置文件 | `~/.openclaw/openclaw.json` 存在且可读写 |
+| 权限 | Unix/Linux: 已配置 sudo 权限；Windows: 以管理员身份运行 |
 
 ---
 
 ## 安全说明
 
 - **API Key 不输出**：Key 仅在内存中用于构造请求头，不会被打印、记录或传到任何第三方
-- **最小写权限**：`reload-gateway.py` 通过 sudo 执行 config 命令，仅修改 `agents.defaults.model.primary` 一个字段
+- **最小写权限**：`reload-gateway.py` 通过 sudo（Unix/Linux）或管理员权限（Windows）执行 config 命令，仅修改 `agents.defaults.model.primary` 一个字段
 - **无外部网络请求**：所有网络请求仅发向 provider 配置的 `baseUrl`，`reload-gateway.py` 仅调用本机 `localhost` 健康检查
-- **原子操作**：stop/config/start 流程确保 gateway 一致性，避免部分更新导致的不一致状态
+- **原子操作**：stop/config/start 流程确保 gateway 一致性，避免部分更新导致的不一致状态；更新 skill 时采用备份-替换-清理的原子操作，失败可回滚
 
 ---
 
