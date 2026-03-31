@@ -35,6 +35,19 @@ def main():
 
     target_model_id = sys.argv[1].strip()
 
+    # 基本验证：长度和非法字符
+    if len(target_model_id) > 256:
+        print("ERROR: 模型 ID 过长（超过 256 字符）")
+        sys.exit(1)
+    # 检查控制字符（除 \r \n 外）
+    if any(ord(c) < 32 and c not in ('\r', '\n') for c in target_model_id):
+        print("ERROR: 模型 ID 包含非法控制字符")
+        sys.exit(1)
+    # 不应包含换行符
+    if '\n' in target_model_id or '\r' in target_model_id:
+        print("ERROR: 模型 ID 不能包含换行符")
+        sys.exit(1)
+
     if not os.path.isfile(CONFIG_PATH):
         print("ERROR: 配置文件不存在: " + CONFIG_PATH)
         sys.exit(1)

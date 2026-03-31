@@ -70,22 +70,56 @@ def backup_current():
 
 
 def restore_backup():
-    """恢复备份（先完全删除安装目录，再复制）"""
-    if os.path.isdir(BACKUP_DIR):
+    """恢复备份（原子性：先拷贝到临时位置，再原子替换）"""
+    if not os.path.isdir(BACKUP_DIR):
+        error("未找到备份目录: " + BACKUP_DIR)
+        return False
+
+    # 原子恢复：先复制到临时目录，再原子替换，避免中途失败导致安装目录丢失
+    temp_dir = INSTALL_DIR + ".tmp_restore_" + str(os.getpid())
+    old_dir = None  # 保存旧安装目录用于回滚
+    try:
+        # 1. 复制备份到临时目录
+        shutil.copytree(BACKUP_DIR, temp_dir)
+
+        # 2. 如果旧安装目录存在，先移动到临时位置作为回滚点
         if os.path.isdir(INSTALL_DIR):
+            old_dir = INSTALL_DIR + ".old_" + str(os.getpid())
+            os.rename(INSTALL_DIR, old_dir)
+
+        # 3. 原子重命名临时目录为正式安装目录
+        os.rename(temp_dir, INSTALL_DIR)
+
+        # 4. 成功：清理旧版本（如果存在）
+        if old_dir and os.path.isdir(old_dir):
             try:
-                shutil.rmtree(INSTALL_DIR)
-            except Exception as e:
-                error("清理旧安装目录失败: " + str(e))
-                return False
-        try:
-            shutil.copytree(BACKUP_DIR, INSTALL_DIR)
-            log("已恢复备份")
-            return True
-        except Exception as e:
-            error("恢复备份失败: " + str(e))
-            return False
-    return False
+                shutil.rmtree(old_dir)
+            except Exception:
+                pass  # 旧版本清理失败不影响更新结果
+
+        log("已恢复备份（原子操作）")
+        return True
+    except Exception as e:
+        error("恢复备份失败: " + str(e))
+
+        # 尝试回滚到旧安装目录
+        if old_dir and os.path.isdir(old_dir):
+            try:
+                if os.path.isdir(INSTALL_DIR):
+                    shutil.rmtree(INSTALL_DIR)
+                os.rename(old_dir, INSTALL_DIR)
+                log("已回滚到旧版本")
+            except Exception:
+                pass
+
+        # 清理临时文件
+        for d in [temp_dir, old_dir]:
+            if d and os.path.isdir(d):
+                try:
+                    shutil.rmtree(d)
+                except Exception:
+                    pass
+        return False
 
 
 def validate_install(skill_dir):
@@ -144,7 +178,12 @@ def update_via_git():
             log("拉取成功（分支: " + branch + "）")
             return True
         else:
-            error("拉取失败: " + result.stderr)
+            err_msg = result.stderr.strip() or result.stdout.strip() or "未知错误"
+            error("拉取失败: " + err_msg)
+            # 检测常见失败原因
+            if any(keyword in err_msg.lower() for keyword in
+                   ["non-fast-forward", "conflict", "need to merge", "rebase"]):
+                error("提示：检测到本地有未推送的提交或冲突。请手动执行 git pull 解决，或使用 update-skill.py 的复制模式。")
             return False
     except Exception as e:
         error("拉取异常: " + str(e))
@@ -152,25 +191,65 @@ def update_via_git():
 
 
 def update_via_copy():
-    """通过复制当前目录更新（备选方案）"""
+    """通过复制当前目录更新（备选方案，需确保从独立源目录执行）"""
     source_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    log("正在从当前目录复制文件...")
+
+    # 防止自拷贝：如果源目录就是安装目录，复制将导致数据丢失
+    if os.path.normpath(source_dir) == os.path.normpath(INSTALL_DIR):
+        error("复制方式失败：检测到源目录与安装目录相同，这会导致技能被清空。")
+        error("请从 Git 仓库目录执行更新，或使用以下命令手动重新克隆：")
+        error("  git clone https://github.com/Daiyimo/openclaw-switch-model ~/.openclaw/skills/switch-model")
+        return False
+
+    log("正在从源目录复制文件: " + source_dir)
 
     if not validate_install(source_dir):
         error("源目录文件不完整，无法复制")
         return False
 
     try:
-        # 移除旧安装
-        if os.path.isdir(INSTALL_DIR):
-            shutil.rmtree(INSTALL_DIR)
+        # 原子更新：先复制到临时目录，再原子替换
+        temp_dir = INSTALL_DIR + ".tmp_update_" + str(os.getpid())
+        shutil.copytree(source_dir, temp_dir)
 
-        # 复制新版本
-        shutil.copytree(source_dir, INSTALL_DIR)
-        log("复制完成")
+        # 如果旧安装目录存在，先移动到临时位置作为回滚点
+        old_dir = None
+        if os.path.isdir(INSTALL_DIR):
+            old_dir = INSTALL_DIR + ".old_" + str(os.getpid())
+            os.rename(INSTALL_DIR, old_dir)
+
+        # 原子重命名
+        os.rename(temp_dir, INSTALL_DIR)
+
+        # 成功：清理旧版本（如果存在）
+        if old_dir and os.path.isdir(old_dir):
+            try:
+                shutil.rmtree(old_dir)
+            except Exception:
+                pass  # 旧版本清理失败不影响更新结果
+
+        log("复制完成（原子操作）")
         return True
     except Exception as e:
         error("复制失败: " + str(e))
+
+        # 尝试回滚
+        if old_dir and os.path.isdir(old_dir):
+            try:
+                if os.path.isdir(INSTALL_DIR):
+                    shutil.rmtree(INSTALL_DIR)
+                os.rename(old_dir, INSTALL_DIR)
+                log("已回滚到旧版本")
+            except Exception:
+                pass
+
+        # 清理临时文件
+        for d in [temp_dir, old_dir]:
+            if d and os.path.isdir(d):
+                try:
+                    shutil.rmtree(d)
+                except Exception:
+                    pass
         return False
 
 

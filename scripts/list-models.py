@@ -52,11 +52,12 @@ def main():
     print(current, flush=True)
 
     # 遍历 models.providers，仅提取 id 和 name，跳过所有凭证字段
-    providers = {}
-    try:
-        providers = config.get("models", {}).get("providers", {})
-    except (AttributeError, TypeError):
-        pass
+    models_section = config.get("models")
+    if not isinstance(models_section, dict):
+        models_section = {}
+    providers = models_section.get("providers", {})
+    if not isinstance(providers, dict):
+        providers = {}
 
     for provider_name, provider_cfg in providers.items():
         if not isinstance(provider_cfg, dict):

@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+*.swo
+.DS_Store
+
+# 虚拟环境
+venv/
+env/
+.venv/

@@ -41,6 +41,7 @@ if sys.platform == "win32":
 
 CONFIG_PATH = os.path.expanduser("~/.openclaw/openclaw.json")
 PROBE_TIMEOUT = 30  # 秒（免费模型如 openrouter 可能响应较慢）
+MAX_RESPONSE_SIZE = 1024 * 1024  # 限制响应体为 1MB，防止内存耗尽
 
 
 def check_gateway_health(port, token):
@@ -56,7 +57,8 @@ def check_gateway_health(port, token):
     except urllib.error.HTTPError as e:
         return False, "网关健康检查返回 HTTP " + str(e.code)
     except urllib.error.URLError as e:
-        return False, "无法连接到网关: " + str(e.reason)
+        reason_str = str(e.reason) if e.reason else str(e)
+        return False, "无法连接到网关: " + reason_str
     except Exception as e:
         return False, "网关检查异常: " + str(e)
 
@@ -139,11 +141,11 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
             "messages": [{"role": "user", "content": "Hi"}]
         }
         # Anthropic 原生 API 需要 x-api-key 头而非 Authorization（仅直连模式）
-        if "anthropic.com" in base_url and not use_auth_header:
+        if not use_auth_header:
             if "Authorization" in headers:
                 del headers["Authorization"]
             headers["x-api-key"] = provider_cfg.get("apiKey", "")
-            headers["anthropic-version"] = "2023-06-01"
+            headers["anthropic-version"] = "2024-01-01"  # 使用较新的 API 版本
     else:
         # OpenAI-compatible completions
         body = {
@@ -165,7 +167,12 @@ def probe_one(full_id, model_name, provider_name, provider_cfg, model_id, config
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as resp:
             status = resp.status
-            resp_body = resp.read().decode("utf-8", errors="replace")
+            # 限制响应体大小，防止恶意或错误的大响应耗尽内存
+            resp_body_bytes = resp.read(MAX_RESPONSE_SIZE)
+            # 检查是否还有更多数据未读
+            if resp.read(1):  # 尝试再读 1 字节
+                return (full_id, False, model_name, "响应体过大（超过 1MB）")
+            resp_body = resp_body_bytes.decode("utf-8", errors="replace")
             # 2xx 均视为成功；某些 provider 返回 200 但 body 含 error 字段
             if 200 <= status < 300:
                 # 检查 body 中是否有明确的 error 字段
@@ -203,7 +210,9 @@ def probe_one(full_id, model_name, provider_name, provider_cfg, model_id, config
             pass
         return (full_id, False, model_name, reason)
     except urllib.error.URLError as e:
-        return (full_id, False, model_name, "连接失败: " + str(e.reason)[:120])
+        # e.reason 可能是异常对象，使用 str() 统一转换
+        reason_str = str(e.reason) if e.reason else str(e)
+        return (full_id, False, model_name, "连接失败: " + reason_str[:120])
     except Exception as e:
         return (full_id, False, model_name, "未知错误: " + str(e)[:120])
 
@@ -215,11 +224,13 @@ def main():
     filter_arg = sys.argv[1] if len(sys.argv) > 1 else ""
     filter_id = filter_arg.strip() or None
 
-    providers = {}
-    try:
-        providers = config.get("models", {}).get("providers", {})
-    except (AttributeError, TypeError):
-        pass
+    # 安全获取 providers，确保是字典类型
+    models_section = config.get("models")
+    if not isinstance(models_section, dict):
+        models_section = {}
+    providers = models_section.get("providers", {})
+    if not isinstance(providers, dict):
+        providers = {}
 
     tasks = []
     for provider_name, provider_cfg in providers.items():
