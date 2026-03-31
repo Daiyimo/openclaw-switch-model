@@ -44,6 +44,18 @@ PROBE_TIMEOUT = 30  # 秒（免费模型如 openrouter 可能响应较慢）
 MAX_RESPONSE_SIZE = 1024 * 1024  # 限制响应体为 1MB，防止内存耗尽
 
 
+def _is_local_address(url):
+    """判断 URL 是否为本地地址（localhost/127.0.0.1 等）"""
+    try:
+        from urllib.parse import urlparse
+        hostname = urlparse(url).hostname
+        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def check_gateway_health(port, token):
     """前置检查：网关是否可用"""
     url = "http://127.0.0.1:" + str(port) + "/health"
@@ -107,6 +119,16 @@ def build_headers_and_body(provider_name, provider_cfg, model_id, config):
     # 若 authHeader=true，则通过本地 openclaw gateway 代理探测
     # （适用于 minimax 等 provider，gateway 会注入真实 key 再转发）
     use_auth_header = provider_cfg.get("authHeader", False)
+
+    # 自动纠正：如果 baseUrl 指向本地地址但 authHeader=false，强制使用网关
+    # 常见配置错误：用户将 baseUrl 设为本地网关地址却忘记开启 authHeader
+    if not use_auth_header and _is_local_address(base_url):
+        sys.stderr.write(
+            "[WARNING] provider " + provider_name + " 的 baseUrl 为本地地址 (" +
+            base_url + ")，但 authHeader=false。自动切换到网关模式探测。\n"
+        )
+        use_auth_header = True
+
     if use_auth_header:
         gw_token = get_auth_token(config)
         if not gw_token:
